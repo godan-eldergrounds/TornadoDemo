@@ -26,7 +26,7 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
     private float _attackTimer;
     private float _baseWeaponDmgMultiplier = 1;
 
-    private float CurrentAttackInterval => tornadoStats.AttackRate - attackSpeedAugment.shootIntervalDeduction;
+    private float CurrentAttackInterval => tornadoStats.AttackInterval - attackSpeedAugment.shootIntervalDeduction;
     private float TotalProjectileCount => tornadoStats.Count + spreadAugment.bonusProjectileCount;
 
     new void Start()
@@ -43,6 +43,7 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
     void Update()
     {
         if (_gameState == null || _gameState.IsPaused) return;
+
         HandleAttackTimer();
     }
 
@@ -74,9 +75,9 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
 
         if (tornadoInstance.TryGetComponent(out TornadoProjectile tornadoProjectile))
         {
-            tornadoProjectile.SetFinalDamage(finalDamage, isCritical);
             tornadoProjectile.SetTornadoStats(tornadoStats, movementStats, statusEffectArgs, sizeAugment.bonusSize);
             tornadoProjectile.SetTornadoColor(tornadoColor);
+            tornadoProjectile.SetFinalDamage(finalDamage, isCritical);
         }
     }
 
