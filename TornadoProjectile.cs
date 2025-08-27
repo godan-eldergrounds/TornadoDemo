@@ -1,6 +1,5 @@
 using System;
 using Lean.Pool;
-using MyBox;
 using UnityEngine;
 using UnityEngine.VFX;
 
@@ -21,33 +20,39 @@ public class TornadoMovementStats
     [Range(0, 50)] public float swayFrequency;
 
     [Header("Scale Time")]
-    public float scaleUpTime = 1f; // Time to scale up
-    public float scaleDownTime = 1f; // Time to scale down
+    public float scaleUpTime = 1f;
+    public float scaleDownTime = 1f;
 }
 
+[RequireComponent(typeof(VisualEffect))]
 public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
 {
     [Header("VFX")]
     [SerializeField] private VisualEffect vfx;
 
-    [Header("Stats")]
+    [Header("Damage Collider")]
     [SerializeField] private DamageCollider damageCollider;
+
+    [Header("Stats")]
     [SerializeField] private TornadoStats tornadoStats;
     [SerializeField] private TornadoMovementStats movementStats;
 
-    private DamageArgs damageArgs = new DamageArgs(0, DamageSource.Tornado);
+    private const float ChangeSpeedInterval = 2f;
 
-    private float _angle, _elapsedTime;
+    private float _angleDegrees, _elapsedTime;
 
     private bool _isScalingUp = false, _isScalingDown = false;
     private Vector3 _startUpScale, _startDownScale;
     private Vector3 _targetScaleUp, _targetScaleDown;
     private float _scalingUpTime, _scalingDownTime;
+    
     private float _speedTimer;
     private float _currentSpeed, _timeOffset, _targetSpeed;
 
     private bool _isWobblingUp, _isWobblingDown;
     private float _wobbleTime;
+
+    private DamageArgs damageArgs = new DamageArgs(0, DamageSource.Tornado);
 
     void Awake()
     {
@@ -65,7 +70,7 @@ public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
 
     void Update()
     {
-        if (gameState == null || gameState.IsPaused) return;
+        if (_gameState == null || _gameState.IsPaused) return;
 
         TornadoDurationUpdate();
         TornadoMovementUpdate();
@@ -99,7 +104,7 @@ public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
     {
         _scalingUpTime += Time.deltaTime;
         transform.localScale = Vector3.Lerp(_startUpScale, _targetScaleUp, _scalingUpTime);
-        if (_scalingUpTime >= movementStats.scaleUpTime / 2)
+        if (_scalingUpTime >= movementStats.scaleUpTime)
         {
             _isScalingUp = false;
         }
@@ -116,14 +121,13 @@ public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
         }
     }
 
-
     private void TornadoMovementUpdate()
     {
         float delta = Time.deltaTime;
 
         // Update speed only every few seconds
         _speedTimer += delta;
-        if (_speedTimer > 2f) // every 2 seconds
+        if (_speedTimer > ChangeSpeedInterval)
         {
             _targetSpeed = UnityEngine.Random.Range(movementStats.minSpeed, movementStats.maxSpeed);
             _speedTimer = 0f;
@@ -132,32 +136,30 @@ public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
         // Smoothly interpolate to target speed, target speed changes every few seconds
         _currentSpeed = Mathf.Lerp(_currentSpeed, _targetSpeed, delta * movementStats.speedChangeRate);
 
-        // Perlin noise influences turning
         // Perlin noise is a way to generate smooth random values, Mathf.PerlinNoise returns 0 to 1
         // We remap it to -1 to +1 by multiplying by 2 and subtracting 1
         float noise = Mathf.PerlinNoise(_timeOffset, Time.time * movementStats.noiseSpeed) * 2f - 1f;
         float noiseTurn = noise * 45f; // max 45 degrees turn if noise is 1
 
-        _angle += noiseTurn * delta;
+        _angleDegrees += noiseTurn * delta;
 
         // Add sway to make it less linear
         // Mathf.Sin returns -1 to +1 forming a sine wave, multiple it by frequency and amplitude
         // Time.time is used to make it change over time - this will change sway's value over time forming the sine wave
         // Frequency controls how fast it oscillates, amplitude controls how wide the sway is
         float sway = Mathf.Sin(Time.time * movementStats.swayFrequency) * movementStats.swayAmplitude;
-        float finalAngle = _angle + sway;
+        float finalAngleDegrees = _angleDegrees + sway;
 
-        // Convert angle to direction vector
         // finalAngle is in degrees, need to convert to radians for Mathf.Cos and Mathf.Sin
         // cos controls left-right (X), sin controls forward-back (Z), and together they sweep around a circle.
         // (cos θ, sin θ) is always on the unit circle with 1 length or magnitude
-        float rad = finalAngle * Mathf.Deg2Rad;
-        Vector3 moveDir = new Vector3(Mathf.Cos(rad), 0f, Mathf.Sin(rad));
+        float radians = finalAngleDegrees * Mathf.Deg2Rad;
+        Vector3 moveDir = new Vector3(Mathf.Cos(radians), 0f, Mathf.Sin(radians));
 
         // Movement
         // Scale movement by current X scale, bigger tornado moves faster
         // moveDir should be normalized already but just in case..
-        float scaleFactor = transform.localScale.x; 
+        float scaleFactor = transform.localScale.x;
         transform.position += _currentSpeed * delta * scaleFactor * moveDir.normalized;
     }
 
@@ -177,13 +179,13 @@ public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
     private void Initialize(TornadoStats tornadoStats, float bonusScale = 0)
     {
         _isScalingUp = true;
-        _angle = UnityEngine.Random.Range(0f, 360f);
+        _angleDegrees = UnityEngine.Random.Range(0f, 360f);
         _timeOffset = UnityEngine.Random.Range(0f, 999f);
-        transform.localScale = Vector3.one * 0.5f;
+        transform.localScale = Vector3.one * 0.5f; // default scale
         _startUpScale = transform.localScale;
         _targetScaleUp = Vector3.one * (tornadoStats.Scale + bonusScale);
         _targetScaleDown = Vector3.zero;
-        _speedTimer = tornadoStats.AttackRate / 2;
+        _speedTimer = tornadoStats.AttackInterval / 2; // first shot is half the normal interval
     }
 
     private void AnimateWobbleValues()
@@ -201,10 +203,7 @@ public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
         }
     }
 
-    public void OnSpawn()
-    {
-
-    }
+    public void OnSpawn() { }
 
     public void OnDespawn()
     {
@@ -219,7 +218,6 @@ public class TornadoProjectile : MonoBehaviourWithGameState, IPoolable
     {
         if (tornadoColor == null) return;
 
-        Logger.Log($"Setting Tornado Color: {tornadoColor.mainColor} and {tornadoColor.secondaryColor} on {gameObject.name}");
         vfx.SetVector4("Primary Tornado Color", tornadoColor.mainColor);
         vfx.SetVector4("Tornado Base Color", tornadoColor.mainColor);
         vfx.SetVector4("Secondary Tornado Color", tornadoColor.secondaryColor);
