@@ -6,8 +6,10 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
 {
     [SerializeField] private GameObject tornadoPrefab;
 
-    [SerializeField][ReadOnly] private TornadoStats tornadoStats;
-    [SerializeField][ReadOnly] private TornadoMovementStats movementStats;
+    [Header("Tornado Stats")]
+    [SerializeField] private TornadoStats tornadoStats;
+    [SerializeField] private TornadoMovementStats movementStats;
+    [SerializeField] private TornadoColor tornadoColor;
 
     [Header("Status Effect")]
     [SerializeField] private StatusEffectArgs statusEffectArgs;
@@ -17,12 +19,15 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
     [SerializeField] private SpreadAugment spreadAugment;
     [SerializeField] private AttackSpeedAugment attackSpeedAugment;
 
-    [Header("Upgrade Settings")]
+    [Header("Upgrade Settings SO")]
     [SerializeField][DisplayInspector] private TornadoUpgradeSettings tornadoUpgradeSettings;
 
-    private float attackTimer;
     private int _currentLevel;
-    private float _baseWeaponDmgMultiplier;
+    private float _attackTimer;
+    private float _baseWeaponDmgMultiplier = 1;
+
+    private float CurrentAttackInterval => tornadoStats.AttackRate - attackSpeedAugment.shootIntervalDeduction;
+    private float TotalProjectileCount => tornadoStats.Count + spreadAugment.bonusProjectileCount;
 
     new void Start()
     {
@@ -37,18 +42,17 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
 
     void Update()
     {
-        if (gameState == null || gameState.IsPaused) return;
-        
+        if (_gameState == null || _gameState.IsPaused) return;
         HandleAttackTimer();
     }
 
     private void HandleAttackTimer()
     {
-        attackTimer += Time.deltaTime;
-        if (attackTimer >= tornadoStats.AttackRate - attackSpeedAugment.shootIntervalDeduction)
+        _attackTimer += Time.deltaTime;
+        if (_attackTimer >= CurrentAttackInterval)
         {
-            attackTimer = 0f;
-            for (int i = 0; i < tornadoStats.Count + spreadAugment.bonusProjectileCount; i++)
+            _attackTimer = 0f;
+            for (int i = 0; i < TotalProjectileCount; i++)
             {
                 SpawnTornado();
             }
@@ -61,52 +65,77 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
         GameObject tornadoInstance = LeanPool.Spawn(tornadoPrefab, transform.position, Quaternion.identity);
         if (tornadoInstance == null)
         {
-            Debug.LogError("Failed to spawn TornadoPrefab.");
+            Debug.LogError("TornadoWeapon - SpawnTornado() - Failed to spawn TornadoPrefab.");
             return;
         }
 
         bool isCritical = IsCriticalDamage();
+        float finalDamage = GetFinalTornadoDamage(isCritical);
+
+        if (tornadoInstance.TryGetComponent(out TornadoProjectile tornadoProjectile))
+        {
+            tornadoProjectile.SetFinalDamage(finalDamage, isCritical);
+            tornadoProjectile.SetTornadoStats(tornadoStats, movementStats, statusEffectArgs, sizeAugment.bonusSize);
+            tornadoProjectile.SetTornadoColor(tornadoColor);
+        }
+    }
+
+    private float GetFinalTornadoDamage(bool isCritical)
+    {
         float finalDamage = GetFinalDamage(tornadoStats.Damage * _baseWeaponDmgMultiplier, isCritical);
         if (spreadAugment.bonusProjectileCount > 0)
         {
             finalDamage *= spreadAugment.spreadDamageMultiplier;
         }
-
-        if (tornadoInstance.TryGetComponent(out TornadoProjectile tornadoProjectile))
-        {
-            int index = Mathf.Clamp(_currentLevel, 0, tornadoUpgradeSettings.statusEffectArgsPerLevel.Length - 1);
-            statusEffectArgs = tornadoUpgradeSettings.statusEffectArgsPerLevel[index];
-            tornadoProjectile.SetFinalDamage(finalDamage, isCritical);
-            tornadoProjectile.SetTornadoStats(tornadoStats, movementStats, statusEffectArgs, sizeAugment.bonusSize);
-            tornadoProjectile.SetTornadoColor(tornadoUpgradeSettings.statusEffectColors[statusEffectArgs.StatusEffect]);
-        }
+        return finalDamage;
     }
+
+    public void SetLevelStats(int level)
+    {
+        ApplyBasicStats(level);
+        ApplyStatusEffectStats(level);
+    }
+
+    private void ApplyStatusEffectStats(int level)
+    {
+        TryGetUpgradeSettingsSO();
+        if (tornadoUpgradeSettings == null || tornadoUpgradeSettings.statusEffectArgsPerLevel.Length == 0)
+        {
+            Logger.LogWarning($"TornadoWeapon - ApplyStatusEffectStats() - TornadoUpgradeSettings or statusEffectArgsPerLevel is not assigned.");
+            return;
+        }
+
+        int statusIndex = Mathf.Clamp(level, 0, tornadoUpgradeSettings.statusEffectArgsPerLevel.Length - 1);
+        statusEffectArgs = tornadoUpgradeSettings.statusEffectArgsPerLevel[statusIndex];
+        tornadoColor = tornadoUpgradeSettings.statusEffectColors[statusEffectArgs.StatusEffect];
+    }
+
+    private void ApplyBasicStats(int level)
+    {
+        TryGetUpgradeSettingsSO();
+        if (tornadoUpgradeSettings == null || tornadoUpgradeSettings.perLevelSettings.Length == 0)
+        {
+            Logger.LogWarning($"TornadoWeapon - ApplyStatusEffectStats() - TornadoUpgradeSettings or perLevelSettings is not assigned.");
+            return;
+        }
+
+        int index = Mathf.Clamp(level, 0, tornadoUpgradeSettings.perLevelSettings.Length - 1);
+        tornadoStats = tornadoUpgradeSettings.perLevelSettings[index];
+        movementStats = tornadoUpgradeSettings.movementStats;
+    }
+
+    #region IWeaponInterface
 
     public void SetBaseLevel()
     {
-        TryGetUpgradeSettingsSO();
         _currentLevel = 0;
         SetLevelStats(_currentLevel);
     }
 
     public void IncreaseLevel()
     {
-        TryGetUpgradeSettingsSO();
         _currentLevel++;
         SetLevelStats(_currentLevel);
-    }
-
-    [ButtonMethod]
-    public void SetCurrentLevelStats()
-    {
-        SetLevelStats(_currentLevel);
-    }
-
-    public void SetLevelStats(int level)
-    {
-        int index = Mathf.Clamp(level, 0, tornadoUpgradeSettings.perLevelSettings.Length - 1);
-        tornadoStats = tornadoUpgradeSettings.perLevelSettings[index];
-        movementStats = tornadoUpgradeSettings.movementStats;
     }
 
     public void SetBaseWeaponDamageMultiplier(float damageMultiplier = 1)
@@ -118,45 +147,36 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
     {
         TryGetUpgradeSettingsSO();
 
-        if (tornadoUpgradeSettings == null) return;
+        if (tornadoUpgradeSettings == null)
+        {
+            Logger.LogWarning($"TornadoWeapon - OnPlayerUpgraded() - TornadoUpgradeSettings is not assigned.");
+            return;
+        }
 
-        if (!tornadoUpgradeSettings.acceptsAugments) return;
+        if (!tornadoUpgradeSettings.acceptsAugments)
+        {
+            Logger.LogWarning($"TornadoWeapon - OnPlayerUpgraded() - TornadoUpgradeSettings does not accept augments.");
+            return;
+        }
 
         int upgradeLevel = PlayerUpgradesManager.Instance.GetCurrentUpgradeLevel(type);
 
         if (type == UpgradeType.AttackSpeed && tornadoUpgradeSettings.HasAugmentSupport(AugmentType.AttackSpeed))
         {
-            IncreaseAttackSpeedLevel(upgradeLevel);
+            attackSpeedAugment = GetAugment(tornadoUpgradeSettings.attackSpeedAugmentSettings, upgradeLevel);
         }
         else if (type == UpgradeType.ProjectileSize && tornadoUpgradeSettings.HasAugmentSupport(AugmentType.Size))
         {
-            IncreaseProjectileSizeLevel(upgradeLevel);
+            sizeAugment = GetAugment(tornadoUpgradeSettings.sizeAugmentSettings, upgradeLevel);
         }
         else if (type == UpgradeType.Spread && tornadoUpgradeSettings.HasAugmentSupport(AugmentType.Spread))
         {
-            IncreaseSpreadLevel(upgradeLevel);
+            spreadAugment = GetAugment(tornadoUpgradeSettings.spreadAugmentSettings, upgradeLevel);
         }
-    }
-
-    private void IncreaseSpreadLevel(int upgradeLevel)
-    {
-        TryGetUpgradeSettingsSO();
-        int index = Mathf.Clamp(upgradeLevel - 1, 0, tornadoUpgradeSettings.spreadAugmentSettings.Length - 1);
-        spreadAugment = tornadoUpgradeSettings.spreadAugmentSettings[index];
-    }
-
-    private void IncreaseProjectileSizeLevel(int upgradeLevel)
-    {
-        TryGetUpgradeSettingsSO();
-        int index = Mathf.Clamp(upgradeLevel - 1, 0, tornadoUpgradeSettings.sizeAugmentSettings.Length - 1);
-        sizeAugment = tornadoUpgradeSettings.sizeAugmentSettings[index];
-    }
-
-    private void IncreaseAttackSpeedLevel(int upgradeLevel)
-    {
-        TryGetUpgradeSettingsSO();
-        int index = Mathf.Clamp(upgradeLevel - 1, 0, tornadoUpgradeSettings.attackSpeedAugmentSettings.Length - 1);
-        attackSpeedAugment = tornadoUpgradeSettings.attackSpeedAugmentSettings[index];
+        else
+        {
+            Logger.LogWarning($"TornadoWeapon - OnPlayerUpgraded() - UpgradeType {type} is not supported by TornadoWeapon.");
+        }
     }
 
     public void TryGetUpgradeSettingsSO()
@@ -167,4 +187,8 @@ public class TornadoWeapon : BoostableDamageBehavior, IWeaponInterface
                 .GetUpgradeData<TornadoUpgradeSettings>(UpgradeType.Tornado);
         }
     }
+    #endregion IWeaponInterface
+
+    private T GetAugment<T>(T[] settings, int upgradeLevel)
+        => settings[Mathf.Clamp(upgradeLevel - 1, 0, settings.Length - 1)];
 }
